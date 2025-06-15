@@ -1,0 +1,26 @@
+[project]
+name = "qu1"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "datasets>=3.6.0",
+    "jax[tpu]>=0.6.1",
+    "miditok>=3.0.5.post1",
+    "torch>=2.7.1",
+]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+[tool.uv]
+prerelease = "allow"
+[tool.uv.sources]
+torch = [
+    { index = "pytorch" },
+]
+triton = [
+    { index = "pytorch" }
+]

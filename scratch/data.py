@@ -49,3 +49,15 @@ plt.ylabel("Frequency")
 plt.title("Length Distribution of Aria MIDI Dataset")
 plt.show()
 #%%
+import datasets
+all_tokens = datasets.load_dataset("nev/aria-remi", split="train")["tokens"]
+# %%
+import numpy as np
+lengths = np.array([len(x) for x in all_tokens], dtype=np.int32)
+combined_tokens = np.array([x for y in all_tokens for x in y], dtype=np.int32)
+# %%
+tokens_mmap = np.memmap("../data/tokens.dat", dtype=np.int32, mode="w+", shape=(len(combined_tokens),))
+tokens_mmap[:] = combined_tokens
+#%%
+lengths_mmap = np.memmap("../data/lengths.dat", dtype=np.int32, mode="w+", shape=(len(lengths),))
+lengths_mmap[:] = lengths

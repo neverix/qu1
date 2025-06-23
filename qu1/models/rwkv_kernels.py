@@ -7,24 +7,24 @@ from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 
 
-def w_transform(w):
-    return w
-
-def w_transform_inv(w):
-    return 1 / w
-
-def w_transform_backward(w, w_exp, dw_exp):
-    return dw_exp
-
 # def w_transform(w):
-#     return jnp.exp(-jnp.exp(w))
+#     return w
 
 # def w_transform_inv(w):
-#     return jnp.exp(jnp.exp(w))
+#     return 1 / w
 
 # def w_transform_backward(w, w_exp, dw_exp):
-#     # return -jnp.exp(w) * w_exp * dw_exp
-#     return w_exp * (-jnp.exp(w)) * dw_exp
+#     return dw_exp
+
+def w_transform(w):
+    return jnp.exp(-jnp.exp(w))
+
+def w_transform_inv(w):
+    return jnp.exp(jnp.exp(w))
+
+def w_transform_backward(w, w_exp, dw_exp):
+    # return -jnp.exp(w) * w_exp * dw_exp
+    return w_exp * (-jnp.exp(w)) * dw_exp
 
 def state_update(state, rwkvab):
     r, w, k, v, a, b = rwkvab
@@ -200,7 +200,6 @@ def serial_backward(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, ab_ref, dy_ref, st
 def serial_kernel_rwkv_backward(res, gradients):
     dy, dstate = gradients
     r, w, k, v, a, b, ab, state = res
-    # dr, dw, dk, dv, da, db =
 
     seq_len, batch_size, d_head = r.shape
     c_b = 16
@@ -265,8 +264,7 @@ def rwkv_backward(r, w, k, v, a, b, fn=jax.vmap(scanner)):
     dy = jax.random.normal(key, (batch_size, seq_len, n_heads, d_head))
     def rwkv_update_gradsum(r, w, k, v, a, b):
         state, y = rwkv_update(r, w, k, v, a, b, fn=fn)
-        # return jnp.sum(y * dy) + jnp.sum(state * dstate)
-        return jnp.sum(state * dstate)
+        return jnp.sum(y * dy) + jnp.sum(state * dstate)
 
     dr, dw, dk, dv, da, db = jax.grad(rwkv_update_gradsum, argnums=(0, 1, 2, 3, 4, 5))(r, w, k, v, a, b)
     return dr, dw, dk, dv, da, db

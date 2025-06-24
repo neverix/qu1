@@ -6,16 +6,6 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 
-
-# def w_transform(w):
-#     return w
-
-# def w_transform_inv(w):
-#     return 1 / w
-
-# def w_transform_backward(w, w_exp, dw_exp):
-#     return dw_exp
-
 def w_transform(w):
     return jnp.exp(-jnp.exp(w))
 
@@ -23,7 +13,6 @@ def w_transform_inv(w):
     return jnp.exp(jnp.exp(w))
 
 def w_transform_backward(w, w_exp, dw_exp):
-    # return -jnp.exp(w) * w_exp * dw_exp
     return w_exp * (-jnp.exp(w)) * dw_exp
 
 def state_update(state, rwkvab):
@@ -67,7 +56,7 @@ def serial_kernel(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, state_ref, y_ref, ab
     ab = ab.reshape(*state.shape[:2], ab.shape[-1])
 
     if save_ab:
-        ab_sum = ab.reshape(ab.shape[0] * ab.shape[1], -1).T.sum(axis=0).reshape(ab.shape[0], ab.shape[1])
+        ab_sum = ab.reshape(ab.shape[0] * ab.shape[1], -1).T[0].reshape(ab.shape[0], ab.shape[1])
         ab_ref[...] = ab_sum[None, :, :]
 
     new_state_1 = state * w_transform(w_ref[...][0][:, None, :])
@@ -168,29 +157,35 @@ def serial_backward(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, ab_ref, dy_ref, st
     dstate_prev = dstate * w_exp[:, None, :] + \
         (dstate * b[:, None, :]).sum(axis=-1, keepdims=True) * a[:, None, :]
     
-    # 1) dw_exp
-    dw_exp = jnp.sum(state * dstate, axis=1)
+    # 1) dw
+    dw_exp = jnp.sum(prev_state * dstate, axis=1)
     dw = w_transform_backward(w, w_exp, dw_exp)
     dw_ref[...] = dw[None, :, :]
     
-    # 2) da
-    # da_diff = dstate * b[:, None, :] * prev_state
-    da_diff = (dstate * b[:, None, :]).sum(axis=-1, keepdims=True) * prev_state
-    da = da_diff.reshape(-1, da_diff.shape[-1]).T.sum(axis=0).reshape(*da_diff.shape[:2])
-    da = da_diff.sum(axis=1)
+    # 2) dr
+    dr = (state * dy[:, :, None]).sum(axis=1)
+    dr_ref[...] = dr[None, :, :]
+    
+    # 3) db
+    db = (dstate * ab[:, :, None]).sum(axis=1)
+    db_ref[...] = db[None, :, :]
+    
+    # 4) da
+    dab = (dstate * b[:, None, :]).sum(axis=-1, keepdims=True)
+    da = (dab * prev_state).sum(axis=1)
     da_ref[...] = da[None, :, :]
     
-    # new_state_1 = state * w_ref[...][0][:, None, :]
-    # new_state_2 = (state * a_ref[...][0][:, None, :]).sum(axis=-1, keepdims=True) * b_ref[...][0][:, None, :]
-    # new_state_3 = v_ref[...][0][:, :, None] * k_ref[...][0][:, None, :]
-
-    # new_state = new_state_1 + new_state_2 + new_state_3
-    # r = r_ref[...][0]
-
-    # new_state_for_out = new_state.reshape(-1, new_state.shape[2]).T
-    # r_for_out = jnp.repeat(r.T, new_state.shape[1], axis=1)
-    # out = (new_state_for_out * r_for_out).sum(axis=0).reshape(*new_state.shape[:2])
-
+    # 5) dk
+    dk = (dstate * v[:, :, None]).sum(axis=1)
+    dk_ref[...] = dk[None, :, :]
+    
+    # 6) dv
+    dv = (
+        jnp.repeat(k, dstate.shape[1], axis=0)
+        * dstate.reshape(-1, dstate.shape[-1])
+    ).T.sum(axis=0).reshape(*dstate.shape[:2])
+    dv_ref[...] = dv[None, :, :]
+    
     state_acc_ref[...] = prev_state
     dstate_acc_ref[...] = dstate_prev
 

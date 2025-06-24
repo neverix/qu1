@@ -35,7 +35,8 @@ print(rwkv_kernels.benchmark(rwkv_kernels.rwkv_update)(r, w, k, v, a, b), rwkv_k
 back_1 = rwkv_kernels.rwkv_backward(r, w, k, v, a, b)
 back_2 = rwkv_kernels.rwkv_backward(r, w, k, v, a, b, fn=rwkv_kernels.serial_rwkv)
 for x, y in zip(back_1, back_2):
-    x, y = x[:, -1], y[:, -1]
+    s = -2
+    x, y = x[:, s:], y[:, s:]
     print(jnp.corrcoef(x.flatten(), y.flatten())[0, 1])
 #%%
 print(rwkv_kernels.benchmark(rwkv_kernels.rwkv_backward)(r, w, k, v, a, b))

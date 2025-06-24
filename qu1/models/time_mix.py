@@ -6,8 +6,8 @@ from .config import RWKVConfig
 
 
 class TimeMix(eqx.Module):
-    n_head: int
-    head_size: int
+    n_head: int = eqx.field(static=True)
+    head_size: int = eqx.field(static=True)
 
     rwkvag: jax.Array
 
@@ -62,12 +62,10 @@ class TimeMix(eqx.Module):
         # gate for controlling how much of the first layer's v is added to this one
         self.v = Lora(d_model, d_v, key=v_key, bias_post=True)
         
-        
-        replace_bias = lambda m, *args, **kwargs: eqx.tree_at(m, lambda m: m.w2.bias, patterned_bias(config, layer_idx, *args, **kwargs))
+        replace_bias = lambda m, *args, **kwargs: eqx.tree_at(lambda m: m.w2.bias, m, patterned_bias(config, layer_idx, *args, **kwargs))
         self.w = replace_bias(self.w, "w")
         self.a = replace_bias(self.a, "a")
         self.v = replace_bias(self.v, "v")
-        self.g = replace_bias(self.g, "g")
 
         # which components of r+k used to control what heads write a plain copy of v to the output?
         self.r_k = jnp.ones((d_mid,))
@@ -75,9 +73,9 @@ class TimeMix(eqx.Module):
         self.out_gn = GroupNorm(n_head, head_size, eps=config.eps)
         self.out = VLinear(d_mid, d_model, key=v_key, use_bias=False, initialization="zeros")
 
-    def __call__(self, current, prev, v_first = None, first_layer: bool = False, *, state_update):
+    def __call__(self, current, prev, v_first = None, first_layer: bool = False, state = None, *, state_update):
         diff = prev - current
-        xr, xw, xk, xv, xa, xg = (a[..., 0, :] for a in jnp.split(current + self.rwkvag * diff[..., None, :], 6, axis=-2))
+        xr, xw, xk, xv, xa, xg = (a[..., 0, :] for a in jnp.split(current[..., None, :] + self.rwkvag * diff[..., None, :], 6, axis=-2))
 
         bd = current.shape[:-1]
         add_heads = lambda x: x.reshape(bd + (self.n_head, self.head_size))
@@ -112,7 +110,7 @@ class TimeMix(eqx.Module):
         r, w, k, v = map(add_heads, (r, w, k, v))
         a, b = -kk, kk * add_heads(a)
 
-        state, out = state_update(state, r, w, k, v, a, b)
+        state, out = state_update(r, w, k, v, a, b, state=state)
 
         out = rm_heads(out)
         out = self.out_gn(out)

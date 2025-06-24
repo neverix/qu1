@@ -10,6 +10,8 @@ class ChannelMix(eqx.Module):
     d_ff: int
     
     x_k: jax.Array
+    key: VLinear
+    value: VLinear
     
     def __init__(self, *, config: RWKVConfig, layer_idx: int, key: jax.random.PRNGKey):
         self.d_model = config.d_model
@@ -17,8 +19,8 @@ class ChannelMix(eqx.Module):
         
         self.x_k = weighter_init(config, layer_idx, 4.0)
         key1, key2 = jax.random.split(key, 2)
-        self.key = VLinear(d_model, d_ff, key=key1, initialization="uniform")
-        self.value = VLinear(d_ff, d_model, key=key2, initialization="zeros")
+        self.key = VLinear(config.d_model, config.d_ff, key=key1, initialization="uniform")
+        self.value = VLinear(config.d_ff, config.d_model, key=key2, initialization="zeros")
     
     def __call__(self, x):
         k = x + self.x_k * (time_shift(x) - x)

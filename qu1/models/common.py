@@ -1,7 +1,9 @@
+from functools import wraps
+from typing import Literal
+
 import jax
 import jax.numpy as jnp
 import equinox as eqx
-from typing import Literal
 
 
 class VLinear(eqx.Module):
@@ -13,13 +15,13 @@ class VLinear(eqx.Module):
         if initialization == "xavier":
             self.weight = jax.nn.initializers.xavier_normal()(key, (d_out, d_in))
         elif initialization == "orthogonal":
-            self.weight = jax.nn.initializers.orthogonal(gain=0.1)(key, (d_out, d_in))
+            self.weight = jax.nn.initializers.orthogonal(scale=0.1)(key, (d_out, d_in))
         elif initialization == "zeros":
             self.weight = jnp.zeros((d_out, d_in))
         elif initialization == "uniform":
-            self.weight = jax.nn.initializers.uniform(gain=0.5/(d_in ** 0.5))(key, (d_out, d_in))
+            self.weight = jax.nn.initializers.uniform(scale=0.5/(d_in ** 0.5))(key, (d_out, d_in))
         elif initialization == "ratio_orthogonal":
-            self.weight = jax.nn.initializers.orthogonal(gain=0.5 * (d_out / d_in) ** 0.5)(key, (d_out, d_in))
+            self.weight = jax.nn.initializers.orthogonal(scale=0.5 * (d_out / d_in) ** 0.5)(key, (d_out, d_in))
         else:
             raise ValueError(f"Invalid initialization: {initialization}")
         
@@ -38,19 +40,20 @@ class VLayerNorm(eqx.nn.LayerNorm):
         return super().__call__(x.reshape(-1, x.shape[-1])).reshape(x.shape)
 
 
-def vmap_any(f):
-    def fn(x, *args, **kwargs):
-        if x.ndim > 1:
-            return jax.vmap(f)(x, *args, **kwargs)
-        else:
-            return f(x, *args, **kwargs)
-    return fn
+def vmap_any(f, n_dims: int = 1):
+    @wraps(f)
+    def fn_vmap(*args):
+        fn = f
+        for _ in range(args[0].ndim - n_dims):
+            fn = eqx.filter_vmap(fn)
+        return fn(*args)
+    return fn_vmap
 
 
 class Lora(eqx.Module):
     w1: VLinear
     w2: VLinear
-    activation: Literal["none", "sigmoid", "tanh"] = "none"
+    activation: Literal["none", "sigmoid", "tanh"] = eqx.field(static=True, default="none")
 
     def __init__(self, d_in: int, d_mid: int, bias_pre: bool = False, bias_post: bool = False, activation: Literal["none", "sigmoid", "tanh"] = "none", *, key: jax.random.PRNGKey):
         key1, key2 = jax.random.split(key, 2)
@@ -70,11 +73,11 @@ class Lora(eqx.Module):
 
 
 class GroupNorm(eqx.Module):
-    num_groups: int
-    num_channels: int
+    num_groups: int = eqx.field(static=True)
+    num_channels: int = eqx.field(static=True)
     weight: jax.Array
     bias: jax.Array
-    eps: float = eqx.static_field()
+    eps: float = eqx.field(static=True)
 
     def __init__(self, num_groups: int, num_channels: int, *, eps: float = 1e-5):
         self.num_groups = num_groups
@@ -93,12 +96,11 @@ class GroupNorm(eqx.Module):
 
 def weighter_init(config, layer_idx, power: float = 1.0):
     # https://github.com/BlinkDL/RWKV-LM/blob/49cfc1e5ddf348e7d07c08ec2ca527e32e4bcf9a/RWKV-v7/train_temp/src/model.py#L96
-    ratio_0_to_1 = layer_idx / (config.n_layers - 1)  # 0 to 1
     ratio_1_to_almost0 = 1.0 - (layer_idx / config.n_layers)  # 1 to ~0
-    ddd = jnp.zeros((1, 1, d_model)) + jnp.arange(d_model) / d_model
+    ddd = jnp.zeros(config.d_model) + jnp.arange(config.d_model) / config.d_model
     return 1.0 - jnp.power(ddd, power * ratio_1_to_almost0)
 
-def patterned_bias(config, layer_idx, usage: Literal["w", "a", "v", "g"]):
+def patterned_bias(config, layer_idx, usage: Literal["w", "a", "v"]):
     # https://github.com/BlinkDL/RWKV-LM/blob/49cfc1e5ddf348e7d07c08ec2ca527e32e4bcf9a/RWKV-v7/train_temp/src/model.py#L117
     c = config.d_model
     match usage:
@@ -108,8 +110,6 @@ def patterned_bias(config, layer_idx, usage: Literal["w", "a", "v", "g"]):
             linear_weight, zigzag_weight, www_weight, bias = 0.4, 0.3, 0.0, -0.19
         case "v":
             linear_weight, zigzag_weight, www_weight, bias = -0.4, 0.0, 0.73, 0.0
-        case "g":
-            linear_weight, zigzag_weight, www_weight, bias = 0.0, 0.0, 0.0, 0.0
         case _:
             raise ValueError(f"Invalid usage: {usage}")
     n = jnp.arange(c)

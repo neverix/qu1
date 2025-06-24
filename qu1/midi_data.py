@@ -1,6 +1,4 @@
 from torch.utils.data import Dataset
-from torch.utils.data import DataLoader
-import torch
 import numpy as np
 
 class MidiDataset(Dataset):
@@ -25,12 +23,12 @@ class MidiDataset(Dataset):
         elements = [self.at(idx)]
         starts = [0]
         for _ in range(self.max_tokens_in_batch // self.pad_to):
-            if sum(map(len, elements)) > self.max_tokens_in_batch:
+            if sum(map(len, elements)) >= self.max_tokens_in_batch:
                 break
-            idx = np.random.randint(len(self))
             starts.append(sum(map(len, elements)))
+            idx = np.random.randint(len(self))
             elements.append(self.at(idx))
-        combined = np.concatenate(elements)
-        mask = np.zeros(len(combined), dtype=np.int32)
+        combined = np.concatenate(elements)[:self.max_tokens_in_batch]
+        mask = np.zeros(self.max_tokens_in_batch, dtype=np.int32)
         mask[starts] = 1
-        return torch.LongTensor(combined), torch.LongTensor(mask)
+        return combined, mask

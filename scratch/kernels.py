@@ -6,7 +6,7 @@
 import jax
 import jax.numpy as jnp
 from functools import partial
-from qu1.models import rwkv_kernels
+from qu1 import rwkv_kernels
 batch_size = 128
 seq_len = 256
 n_heads = 1

@@ -39,11 +39,12 @@ def scanner(state, rwkvab):
     return jax.lax.scan(state_update, state, rwkvab)
 
 
-def rwkv_update(r, w, k, v, a, b, fn=jax.vmap(scanner)):
+def rwkv_update(r, w, k, v, a, b, state=None, *, fn=jax.vmap(scanner)):
     batch_size, seq_len, n_heads, d_head = r.shape
     reorder = lambda x: x.transpose((0, 2, 1, 3)).reshape((batch_size * n_heads, seq_len, d_head))
     r, w, k, v, a, b = map(reorder, (r, w, k, v, a, b))
-    state = jnp.zeros((batch_size * n_heads, d_head, d_head))
+    if state is None:
+        state = jnp.zeros((batch_size * n_heads, d_head, d_head))
     state, out = fn(state, (r, w, k, v, a, b))
     state = state.reshape(batch_size, n_heads, d_head, d_head)
     out = out.reshape(batch_size, n_heads, seq_len, d_head).transpose(0, 2, 1, 3)

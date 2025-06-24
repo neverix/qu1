@@ -6,6 +6,17 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 
+
+def w_transform(w):
+    return jax.nn.sigmoid(-w)
+
+def w_transform_inv(w):
+    return 1 + jnp.exp(w)
+
+def w_transform_backward(w, w_exp, dw_exp):
+    return -w_exp * (1 - w_exp) * dw_exp
+
+
 def w_transform(w):
     return jnp.exp(-jnp.exp(w))
 
@@ -14,6 +25,13 @@ def w_transform_inv(w):
 
 def w_transform_backward(w, w_exp, dw_exp):
     return w_exp * (-jnp.exp(w)) * dw_exp
+# # w_transform = jnp.ones_like
+# # w_transform_inv = jnp.ones_like
+# # w_transform_backward = lambda x, y, z: jnp.zeros_like(z)
+
+# w_transform = lambda x: x
+# w_transform_inv = lambda x: 1 / x
+# w_transform_backward = lambda x, y, z: z
 
 def state_update(state, rwkvab):
     r, w, k, v, a, b = rwkvab
@@ -34,6 +52,8 @@ def rwkv_update(r, w, k, v, a, b, state=None, *, fn=jax.vmap(scanner)):
     r, w, k, v, a, b = map(reorder, (r, w, k, v, a, b))
     if state is None:
         state = jnp.zeros((batch_size * n_heads, d_head, d_head))
+    else:
+        state = state.reshape(batch_size * n_heads, d_head, d_head)
     state, out = fn(state, (r, w, k, v, a, b))
     state = state.reshape(batch_size, n_heads, d_head, d_head)
     out = out.reshape(batch_size, n_heads, seq_len, d_head).transpose(0, 2, 1, 3)
@@ -58,7 +78,7 @@ def serial_kernel(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, state_ref, y_ref, ab
     if save_ab:
         ab_sum = ab.reshape(ab.shape[0] * ab.shape[1], -1).T[0].reshape(ab.shape[0], ab.shape[1])
         ab_ref[...] = ab_sum[None, :, :]
-
+    
     new_state_1 = state * w_transform(w_ref[...][0][:, None, :])
     new_state_2 = ab * b_ref[...][0][:, None, :]
     new_state_3 = v_ref[...][0][:, :, None] * k_ref[...][0][:, None, :]
@@ -147,8 +167,6 @@ def serial_backward(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, ab_ref, dy_ref, st
     w = w_ref[...][0]
     w_exp = w_transform(w)
     w_exp_inv = w_transform_inv(w)
-    prev_state_w = state - ab_contribution - vk_contribution
-    prev_state = prev_state_w * w_exp_inv[:, None, :]
     
     # we add some gradient from dy
     r = r_ref[...][0]
@@ -156,6 +174,11 @@ def serial_backward(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, ab_ref, dy_ref, st
     # dstate flows through ab and w
     dstate_prev = dstate * w_exp[:, None, :] + \
         (dstate * b[:, None, :]).sum(axis=-1, keepdims=True) * a[:, None, :]
+    dstate_acc_ref[...] = dstate_prev
+    
+    prev_state_w = state - ab_contribution - vk_contribution
+    prev_state = prev_state_w * w_exp_inv[:, None, :]
+    state_acc_ref[...] = prev_state
     
     # 1) dw
     dw_exp = jnp.sum(prev_state * dstate, axis=1)
@@ -172,7 +195,11 @@ def serial_backward(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, ab_ref, dy_ref, st
     
     # 4) da
     dab = (dstate * b[:, None, :]).sum(axis=-1, keepdims=True)
+    # averager = jnp.ones((ab.shape[-1], ab.shape[-1])) / ab.shape[-1]
+    # dab = (dstate * b[:, None, :]) @ averager
+    # dab = (dstate.reshape(-1, dstate.shape[-1]) * b.repeat(dstate.shape[1], axis=0)).T.sum(axis=0).reshape(*dstate.shape[:2])    
     da = (dab * prev_state).sum(axis=1)
+    
     da_ref[...] = da[None, :, :]
     
     # 5) dk
@@ -185,9 +212,6 @@ def serial_backward(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, ab_ref, dy_ref, st
         * dstate.reshape(-1, dstate.shape[-1])
     ).T.sum(axis=0).reshape(*dstate.shape[:2])
     dv_ref[...] = dv[None, :, :]
-    
-    state_acc_ref[...] = prev_state
-    dstate_acc_ref[...] = dstate_prev
 
     @pl.when(pl.program_id(1) == seq_len - 1)
     def _():
@@ -257,13 +281,16 @@ def rwkv_backward(r, w, k, v, a, b, fn=jax.vmap(scanner)):
     key = jax.random.key(0)
     batch_size, seq_len, n_heads, d_head = r.shape
     dstate = jax.random.normal(key, (batch_size, n_heads, d_head, d_head))
+    state = jnp.zeros_like(dstate)
     dy = jax.random.normal(key, (batch_size, seq_len, n_heads, d_head))
-    def rwkv_update_gradsum(r, w, k, v, a, b):
-        state, y = rwkv_update(r, w, k, v, a, b, fn=fn)
+    def rwkv_update_gradsum(r, w, k, v, a, b, state):
+        state, y = rwkv_update(r, w, k, v, a, b, state, fn=fn)
+        # return jnp.sum(y * dy) + jnp.sum(state * dstate)
         return jnp.sum(y * dy) + jnp.sum(state * dstate)
+        # return jnp.sum(state * dstate)
 
-    dr, dw, dk, dv, da, db = jax.grad(rwkv_update_gradsum, argnums=(0, 1, 2, 3, 4, 5))(r, w, k, v, a, b)
-    return dr, dw, dk, dv, da, db
+    dr, dw, dk, dv, da, db, dstate = jax.grad(rwkv_update_gradsum, argnums=(0, 1, 2, 3, 4, 5, 6))(r, w, k, v, a, b, state)
+    return dr, dw, dk, dv, da, db, dstate
 
 # notes on chunked kernel
 # (https://github.com/johanwind/wind_rwkv/blob/main/wind_rwkv/rwkv7/triton_bighead.py)

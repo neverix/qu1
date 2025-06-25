@@ -61,7 +61,7 @@ def rwkv_update(r, w, k, v, a, b, state=None, *, fn=jax.vmap(scanner)):
 
 
 
-def serial_kernel(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, state_ref, y_ref, ab_ref, out_state_ref, state_acc_ref, *, seq_len, save_ab=False):
+def serial_kernel(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, state_ref, y_ref, ab_ref, out_state_ref, saved_state_ref, state_acc_ref, *, seq_len, save_ab=False, chunk_size=None):
     @pl.when(pl.program_id(1) == 0)
     def _():
         state_acc_ref[...] = state_ref[...]
@@ -94,18 +94,23 @@ def serial_kernel(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, state_ref, y_ref, ab
 
     y_ref[...] = out[None, :, :]
 
+    @pl.when(pl.program_id(1) % chunk_size == chunk_size - 1)
+    def _():
+        saved_state_ref[...] = new_state[None]
 
     @pl.when(pl.program_id(1) == seq_len - 1)
     def _():
-        out_state_ref[...] = state_acc_ref[...]
+        out_state_ref[...] = new_state
 
-def serial_rwkv_kernel(r, w, k, v, a, b, state, save_ab=False):
+def serial_rwkv_kernel(r, w, k, v, a, b, state, save_ab=False, chunk_size=32):
     seq_len, batch_size, d_head = r.shape
-    c_b = 32
+    assert r.shape == w.shape == k.shape == v.shape == a.shape == b.shape
+    assert state.shape == (batch_size, d_head, d_head)
+    c_b = 16
     n_batches = batch_size // c_b
 
-    y, ab, state =  pl.pallas_call(
-        partial(serial_kernel, seq_len=seq_len, save_ab=save_ab),
+    y, ab, state, *saved = pl.pallas_call(
+        partial(serial_kernel, seq_len=seq_len, save_ab=save_ab, chunk_size=chunk_size),
         grid_spec=pltpu.PrefetchScalarGridSpec(
             num_scalar_prefetch=0,
             in_specs=[
@@ -117,7 +122,11 @@ def serial_rwkv_kernel(r, w, k, v, a, b, state, save_ab=False):
                 pl.BlockSpec((1, c_b, d_head), lambda i, j: (j, i, 0)),
                 pl.BlockSpec((1, c_b, d_head), lambda i, j: (j, i, 0)),
                 pl.BlockSpec((c_b, d_head, d_head), lambda i, j: (i, 0, 0))
-            ],
+            ] + ([
+                pl.BlockSpec((1, c_b, d_head, d_head), lambda i, j: (j // chunk_size, i, 0, 0)),
+            ] if chunk_size is not None else [
+                pl.BlockSpec((1), lambda i, j: (0,)),
+            ]),
             scratch_shapes=[pltpu.VMEM((c_b, d_head, d_head), jnp.float32)],
             grid=(n_batches, seq_len),
         ),
@@ -125,28 +134,35 @@ def serial_rwkv_kernel(r, w, k, v, a, b, state, save_ab=False):
             jax.ShapeDtypeStruct((seq_len, batch_size, d_head), jnp.float32),
             jax.ShapeDtypeStruct((seq_len, batch_size, d_head), jnp.float32),
             jax.ShapeDtypeStruct((batch_size, d_head, d_head), jnp.float32),
+        ) + (
+            (jax.ShapeDtypeStruct((seq_len // chunk_size, batch_size, d_head, d_head), jnp.float32),)
+            if chunk_size is not None else (
+                jax.ShapeDtypeStruct((1,), jnp.int32),
+            )
         ),
         compiler_params=pltpu.CompilerParams(
             dimension_semantics=("parallel", "arbitrary")
         ),
         interpret=False
     )(r, w, k, v, a, b, state)
-    return y, ab, state
+    return y, (ab, *saved, chunk_size), state
 
 @jax.custom_vjp
 def serial_kernel_rwkv(r, w, k, v, a, b, state):
-    y, ab, state = serial_rwkv_kernel(r, w, k, v, a, b, state)
+    y, _saved, state = serial_rwkv_kernel(r, w, k, v, a, b, state)
     return y, state
 
 def serial_kernel_rwkv_forward(r, w, k, v, a, b, state):
-    y, ab, state_new = serial_rwkv_kernel(r, w, k, v, a, b, state, save_ab=True)
-    return (y, state_new), (r, w, k, v, a, b, ab, state_new)
+    y, saved, state_new = serial_rwkv_kernel(r, w, k, v, a, b, state, save_ab=True)
+    return (y, state_new), (r, w, k, v, a, b, saved, state_new)
 
 
-def serial_backward(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, ab_ref, dy_ref, state_next_ref, dstate_ref,
+def serial_backward(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, ab_ref, dy_ref, states_ref, state_next_ref, dstate_ref,
                     dstate_prev_ref, dr_ref, dw_ref, dk_ref, dv_ref, da_ref, db_ref,
                     state_acc_ref, dstate_acc_ref,
-                    *, seq_len):
+                    *, seq_len, chunk_size):
+    seq_idx = seq_len - pl.program_id(1) - 1
+    
     @pl.when(pl.program_id(1) == 0)
     def _():
         state_acc_ref[...] = state_next_ref[...]
@@ -178,6 +194,11 @@ def serial_backward(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, ab_ref, dy_ref, st
     
     prev_state_w = state - ab_contribution - vk_contribution
     prev_state = prev_state_w * w_exp_inv[:, None, :]
+    prev_state = jax.lax.cond(
+        seq_idx % chunk_size == chunk_size - 1,
+        lambda: states_ref[seq_idx // chunk_size][...],
+        lambda: prev_state
+    )
     state_acc_ref[...] = prev_state
     
     # 1) dw
@@ -219,19 +240,22 @@ def serial_backward(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, ab_ref, dy_ref, st
 
 def serial_kernel_rwkv_backward(res, gradients):
     dy, dstate = gradients
-    r, w, k, v, a, b, ab, state = res
+    r, w, k, v, a, b, saved, state = res
+    ab, states, chunk_size = saved
 
     seq_len, batch_size, d_head = r.shape
-    c_b = 16
+    c_b = 8
     n_batches = batch_size // c_b
 
     dstate_prev, dr, dw, dk, dv, da, db = pl.pallas_call(
-        partial(serial_backward, seq_len=seq_len),
+        partial(serial_backward, seq_len=seq_len, chunk_size=chunk_size),
         grid_spec=pltpu.PrefetchScalarGridSpec(
             num_scalar_prefetch=0,
             in_specs=[
                 pl.BlockSpec((1, c_b, d_head), lambda i, j: (seq_len - j - 1, i, 0)),
             ] * 8 + [
+                pl.BlockSpec((1, c_b, d_head, d_head), lambda i, j: ((seq_len - j - 1) // chunk_size, i, 0, 0)),
+            ] + [
                 pl.BlockSpec((c_b, d_head, d_head), lambda i, j: (i, 0, 0))
             ] * 2,
             out_specs=[
@@ -251,7 +275,7 @@ def serial_kernel_rwkv_backward(res, gradients):
             dimension_semantics=("parallel", "arbitrary")
         ),
         interpret=False
-    )(r, w, k, v, a, b, ab, dy, state, dstate)
+    )(r, w, k, v, a, b, ab, dy, states, state, dstate)
     return (dr, dw, dk, dv, da, db, dstate_prev)
 
 serial_kernel_rwkv.defvjp(serial_kernel_rwkv_forward, serial_kernel_rwkv_backward)

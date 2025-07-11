@@ -9,7 +9,7 @@ from functools import partial
 from qu1 import rwkv_kernels
 batch_size = 128
 seq_len = 256
-n_heads = 1
+n_heads = 8
 d_head = 128
 
 key = jax.random.key(0)
@@ -36,7 +36,7 @@ print(rwkv_kernels.benchmark(rwkv_kernels.rwkv_update)(r, w, k, v, a, b), rwkv_k
 back_1 = rwkv_kernels.rwkv_backward(r, w, k, v, a, b)
 back_2 = rwkv_kernels.rwkv_backward(r, w, k, v, a, b, fn=rwkv_kernels.serial_rwkv)
 for x, y in zip(back_1, back_2):
-    s = -1
+    s = -200
     x, y = x[:, s:], y[:, s:]
     print(jnp.corrcoef(x.flatten(), y.flatten())[0, 1])
 #%%

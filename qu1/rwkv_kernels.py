@@ -172,6 +172,12 @@ def serial_backward(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, ab_ref, dy_ref, st
     dy = dy_ref[...][0]
     dstate = dstate_acc_ref[...]
 
+    state = jax.lax.cond(
+        seq_idx % chunk_size == chunk_size - 1,
+        lambda: states_ref[...][0],
+        lambda: state
+    )
+
     a = a_ref[...][0]
     ab = ab_ref[...][0]
     b = b_ref[...][0]
@@ -194,11 +200,12 @@ def serial_backward(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, ab_ref, dy_ref, st
     
     prev_state_w = state - ab_contribution - vk_contribution
     prev_state = prev_state_w * w_exp_inv[:, None, :]
-    prev_state = jax.lax.cond(
-        seq_idx % chunk_size == chunk_size - 1,
-        lambda: states_ref[seq_idx // chunk_size][...],
-        lambda: prev_state
-    )
+    
+    # prev_state = jax.lax.cond(
+    #     seq_idx % chunk_size == chunk_size - 1,
+    #     lambda: states_ref[seq_idx // chunk_size][...],
+    #     lambda: prev_state
+    # )
     state_acc_ref[...] = prev_state
     
     # 1) dw

@@ -61,3 +61,4 @@ tokens_mmap[:] = combined_tokens
 #%%
 lengths_mmap = np.memmap("../data/lengths.dat", dtype=np.int32, mode="w+", shape=(len(lengths),))
 lengths_mmap[:] = lengths
+# %%

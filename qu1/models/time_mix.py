@@ -73,7 +73,8 @@ class TimeMix(eqx.Module):
         self.out_gn = GroupNorm(n_head, head_size, eps=config.eps)
         self.out = VLinear(d_mid, d_model, key=v_key, use_bias=False, initialization="zeros")
 
-    def __call__(self, current, prev, v_first = None, first_layer: bool = False, state = None, *, state_update):
+    @eqx.filter_checkpoint
+    def __call__(self, current, prev, v_first = None, first_layer: bool = False, state = None, *, state_update, new_mask=None):
         diff = prev - current
         xr, xw, xk, xv, xa, xg = (a[..., 0, :] for a in jnp.split(current[..., None, :] + self.rwkvag * diff[..., None, :], 6, axis=-2))
 
@@ -110,6 +111,14 @@ class TimeMix(eqx.Module):
         r, w, k, v = map(add_heads, (r, w, k, v))
         a, b = -kk, kk * add_heads(a)
 
+        if new_mask is not None:
+            new_mask = jnp.roll(new_mask.at[..., 0].set(0), -1, axis=-1)
+            mm = (1 - new_mask)[..., None, None]
+            w = w * mm
+            k = k * mm
+            v = v * mm
+            a = a * mm
+            b = b * mm
         state, out = state_update(r, w, k, v, a, b, state=state)
 
         out = rm_heads(out)

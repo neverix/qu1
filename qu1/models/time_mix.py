@@ -104,7 +104,7 @@ class TimeMix(eqx.Module):
 
         # exp(-exp(-softplus(w)))
         # w is used as the key to let the past state persist. i don't know why we need two exponentials
-        w = jnp.exp(-0.606531 * jax.nn.sigmoid(w)) # 0.606531 = exp(-0.5)
+        w = -jnp.exp(-0.606531 * jax.nn.sigmoid(w)) # 0.606531 = exp(-0.5)
 
         r_k = add_heads(r * k * self.r_k).sum(axis=-1, keepdims=True)
 

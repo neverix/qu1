@@ -7,9 +7,9 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 from qu1 import rwkv_kernels
-batch_size = 2
-seq_len = 8192
-n_heads = 8
+batch_size = 4
+seq_len = 128
+n_heads = 4
 d_head = 128
 
 key = jax.random.key(0)
@@ -25,6 +25,8 @@ b = jax.random.normal(ks[5], (batch_size, seq_len, n_heads, d_head))
 a = a / jnp.linalg.norm(a, axis=-1, keepdims=True)
 b = a * jax.nn.sigmoid(b)
 
+#%%
+
 gts, gto = rwkv_kernels.rwkv_update(r, w, k, v, a, b)
 
 y = rwkv_kernels.rwkv_update(r, w, k, v, a, b, fn=rwkv_kernels.serial_rwkv)[1]
@@ -36,8 +38,6 @@ print(rwkv_kernels.benchmark(rwkv_kernels.rwkv_update)(r, w, k, v, a, b), rwkv_k
 back_1 = rwkv_kernels.rwkv_backward(r, w, k, v, a, b)
 back_2 = rwkv_kernels.rwkv_backward(r, w, k, v, a, b, fn=rwkv_kernels.serial_rwkv)
 for x, y in zip(back_1, back_2):
-    s = 20
-    x, y = x[:, s:], y[:, s:]
     print(jnp.corrcoef(x.flatten(), y.flatten())[0, 1])
 #%%
 print(rwkv_kernels.benchmark(rwkv_kernels.rwkv_backward)(r, w, k, v, a, b))

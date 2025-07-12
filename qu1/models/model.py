@@ -29,7 +29,6 @@ class RWKVLayer(eqx.Module):
     def __call__(self, x, v_first, state_update, new_mask=None):
         x = jnp.where(self.layer_idx == 0, vmap_any(self.ln0)(x), x)
         x = vmap_any(self.ln1)(x)
-        v_first = v_first * 0
         x_attn, _state, v_first = self.time_mix(x, time_shift(x), v_first, first_layer=self.layer_idx == 0, state_update=state_update, new_mask=new_mask)
         x = x + x_attn
         x = x + self.channel_mix(vmap_any(self.ln2)(x))

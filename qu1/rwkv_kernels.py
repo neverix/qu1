@@ -102,7 +102,7 @@ def serial_kernel(r_ref, w_ref, k_ref, v_ref, a_ref, b_ref, state_ref, y_ref, ab
     def _():
         out_state_ref[...] = new_state
 
-def serial_rwkv_kernel(r, w, k, v, a, b, state, save_ab=False, chunk_size=32):
+def serial_rwkv_kernel(r, w, k, v, a, b, state, save_ab=False, chunk_size=16):
     seq_len, batch_size, d_head = r.shape
     assert r.shape == w.shape == k.shape == v.shape == a.shape == b.shape
     assert state.shape == (batch_size, d_head, d_head)
@@ -316,9 +316,7 @@ def rwkv_backward(r, w, k, v, a, b, fn=jax.vmap(scanner)):
     dy = jax.random.normal(key, (batch_size, seq_len, n_heads, d_head))
     def rwkv_update_gradsum(r, w, k, v, a, b, state):
         state, y = rwkv_update(r, w, k, v, a, b, state, fn=fn)
-        # return jnp.sum(y * dy) + jnp.sum(state * dstate)
         return jnp.sum(y * dy) + jnp.sum(state * dstate)
-        # return jnp.sum(state * dstate)
 
     dr, dw, dk, dv, da, db, dstate = jax.grad(rwkv_update_gradsum, argnums=(0, 1, 2, 3, 4, 5, 6))(r, w, k, v, a, b, state)
     return dr, dw, dk, dv, da, db, dstate

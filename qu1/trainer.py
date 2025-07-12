@@ -23,11 +23,12 @@ class TrainConfig(Serializable):
     tokens_path: Path = Path("data/tokens.dat")
     lengths_path: Path = Path("data/lengths.dat")
     seed: int = 42
-    batch_size: int = 1
-    max_tokens_in_batch: int = 128
+    batch_size: int = 4
+    max_tokens_in_batch: int = 8192
     max_steps: int = 100000
     warmup_steps: int = 50
     learning_rate: float = 1e-5
+    log_every_n_steps: int = 1000
     dtype: Literal["bfloat16", "float32"] = "bfloat16"
     architecture: RWKVConfig = RWKVConfig(
         n_layers=16,
@@ -58,7 +59,9 @@ def main():
         vocab_size=tokenizer.vocab_size
     )
     rwkv = RWKV(config=config, key=jax.random.key(args.seed),
-                state_update=partial(rwkv_update, fn=serial_rwkv))
+                state_update=partial(rwkv_update,
+                                     fn=serial_rwkv
+                                     ))
     
     param_count = sum(p.size for p in jax.tree.flatten(eqx.filter(rwkv, eqx.is_array))[0] if isinstance(p, jax.Array))
     logger.info(f"Parameter count: {param_count}")
@@ -94,7 +97,8 @@ def main():
         rwkv = eqx.apply_updates(rwkv, updates)
         return loss, rwkv, opt_state
     
-    for i, (tokens, restart_mask) in zip(bar := trange(args.max_steps), dataloader):
+    log_dict_buffer = []
+    for train_step, (tokens, restart_mask) in zip(bar := trange(args.max_steps), dataloader):
         tokens, restart_mask = jnp.asarray(tokens.numpy()), jnp.asarray(restart_mask.numpy())
         loss, rwkv, opt_state = train_step(rwkv, tokens, restart_mask, opt_state)
         itps = bar.format_dict["rate"]
@@ -103,8 +107,17 @@ def main():
             mfu = (itps * approx_flops) / one_v4_chip_flops
         else:
             mfu = 0.0
-        wandb.log({"loss": float(loss), "step": i, "mfu": mfu}, step=i)
-        bar.set_postfix({"loss": float(loss)})
+        log_dict_buffer.append(dict(
+            step=train_step,
+            tokens_processed=train_step * args.batch_size * args.max_tokens_in_batch,
+            loss=loss,
+            mfu=mfu,
+        ))
+        if train_step % args.log_every_n_steps == 0:
+            for buf in log_dict_buffer:
+                wandb.log(buf | {"loss": float(buf["loss"])}, step=buf["step"])
+            log_dict_buffer = []
+        bar.set_postfix({"mfu": mfu})
     
     # Close wandb run
     wandb.finish()

@@ -1855,6 +1855,7 @@ dependencies = [
     { name = "matplotlib" },
     { name = "miditok" },
     { name = "optax" },
+    { name = "safetensors" },
     { name = "simple-parsing" },
     { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
@@ -1871,6 +1872,7 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.10.3" },
     { name = "miditok", specifier = ">=3.0.5.post1" },
     { name = "optax", specifier = ">=0.2.5" },
+    { name = "safetensors", specifier = ">=0.6.0rc0" },
     { name = "simple-parsing", specifier = ">=0.1.7" },
     { name = "torch", specifier = ">=2.7.1", index = "https://download.pytorch.org/whl/cpu" },
     { name = "wandb", specifier = ">=0.21.0" },
@@ -1889,6 +1891,28 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e1/0a/929373653770d8a0d7ea76c37de6e41f11eb07559b103b1c02cafb3f7cf8/requests-2.32.4.tar.gz", hash = "sha256:27d0316682c8a29834d3264820024b62a36942083d52caf2f14c0591336d3422", size = 135258, upload-time = "2025-06-09T16:43:07.34Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7c/e4/56027c4a6b4ae70ca9de302488c5ca95ad4a39e190093d6c1a8ace08341b/requests-2.32.4-py3-none-any.whl", hash = "sha256:27babd3cda2a6d50b30443204ee89830707d396671944c998b5975b031ac2b2c", size = 64847, upload-time = "2025-06-09T16:43:05.728Z" },
+]
+
+[[package]]
+name = "safetensors"
+version = "0.6.0rc0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5e/25/d1a0625aaccd168ad08c3ae0e43ef5171f64ec45c6e133e758090834c04e/safetensors-0.6.0rc0.tar.gz", hash = "sha256:0189921a6668449533439b3a73aa1dcc04a60ac2c2b2ea20af56bb03cedbf2d3", size = 197454, upload-time = "2025-06-16T06:37:48.221Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e4/6c/97504e15179509f34a19052f0afde067e603c2b3da403425cc5715815a3c/safetensors-0.6.0rc0-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:8eaf8e3a763952add2520b56dc80b1229048bd05e444b286386918b3598c56a8", size = 454972, upload-time = "2025-06-16T06:37:41.537Z" },
+    { url = "https://files.pythonhosted.org/packages/57/cd/6ed3cb421ffa72d8a6835691d34a6c9d9e7f1512c46d975e9be534b21e68/safetensors-0.6.0rc0-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:cfb75572de3e6dcdd6af57c9934e2580b384495ef6196d43ded1e94972657d5d", size = 433705, upload-time = "2025-06-16T06:37:40.132Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/a3/55ba56248c8399d9a37fc121f8d5038e2a48dfec2b2146fb21034a865e32/safetensors-0.6.0rc0-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:61508547892036e8fe1313b356d1e84f77d01d6d9a5343898c235f6d7c4b39cd", size = 473770, upload-time = "2025-06-16T06:37:31.992Z" },
+    { url = "https://files.pythonhosted.org/packages/16/fb/f2b04d4fd261cf7f1c8c4e36373a63d1be87d64e8bb4211a535ea0c039b7/safetensors-0.6.0rc0-cp38-abi3-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:e78bf605e3eb251bffb7f4e907ca961477b3b6623a9a81c995924a27e428d294", size = 487226, upload-time = "2025-06-16T06:37:34.045Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/ed/8a41dbdba5de8de6853be7c5fd57c1b0b9454eaeccf57e72a4672b6f083f/safetensors-0.6.0rc0-cp38-abi3-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:012e4775b108de5f1a8a9cb005b9368d5ce76d96152f74b5e8e14d9b184117e0", size = 614974, upload-time = "2025-06-16T06:37:35.078Z" },
+    { url = "https://files.pythonhosted.org/packages/97/ed/31db6f37b4a7d9fde57f1aeefbac324a67df7e5dc002b38c5a0c726b84e5/safetensors-0.6.0rc0-cp38-abi3-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:5ef723c99f37dcafc6398b0a3a629d41cd386fa2e30740d51b9a9e9d4c8e2403", size = 524511, upload-time = "2025-06-16T06:37:36.415Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/68/d45386a0fcff1aebea55346868ebe7628bc1a0fd8bb06c341556448cd269/safetensors-0.6.0rc0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:dd2a76df9d5ddd2608fea730c2f614df2f908e30281eaf240a26c8cbae2cb411", size = 486625, upload-time = "2025-06-16T06:37:39.034Z" },
+    { url = "https://files.pythonhosted.org/packages/03/ae/631838bb6f95b466efdcf459be1fbe8b01d601b4e2736a21c966fe31c458/safetensors-0.6.0rc0-cp38-abi3-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:99386b325fdb3e5b704259daf7f0b43dc67816ed78a810c2727b55881a7771cc", size = 518968, upload-time = "2025-06-16T06:37:37.586Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/cc/bdcbf6f3984b50a789273cc5fb1887be05a3183b3da967de455b0669b61e/safetensors-0.6.0rc0-cp38-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:ce5a28428d83959a7d9f0b2999a94b5ea5d834a6963cef830ec0e23cd480e0bb", size = 653018, upload-time = "2025-06-16T06:37:42.977Z" },
+    { url = "https://files.pythonhosted.org/packages/af/f6/75b5002b87f7d7f940a3bc534b57fa43153258162580fd014071a47d6eb5/safetensors-0.6.0rc0-cp38-abi3-musllinux_1_2_armv7l.whl", hash = "sha256:15b6e825fbcb3fc4d23663f670d9f7d38a37e8056cf746ae01ed3e7a348cccfb", size = 749613, upload-time = "2025-06-16T06:37:44.273Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/74/48e197b20ce9e193522ed761bf0e9d3152e1f2ba4fa272cbe633c6ba0582/safetensors-0.6.0rc0-cp38-abi3-musllinux_1_2_i686.whl", hash = "sha256:ad78da0c446c0b52e1ea32679468d2b0db429232a643f50c6b92fb25bf9566fb", size = 689884, upload-time = "2025-06-16T06:37:45.457Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/cf/d5e8508d19a2572c27f0302ed17ba78e4c056c26385b4de26eb8d322664f/safetensors-0.6.0rc0-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:c519518f0c4633baa380fbaf15251b7a9d092806ca10d299c3473a091ea306af", size = 656323, upload-time = "2025-06-16T06:37:46.734Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/52/1498dddd11a864fa3a032e1a43241ef78ff547d4dec7108c509d797d3d3c/safetensors-0.6.0rc0-cp38-abi3-win32.whl", hash = "sha256:78b7d556c0c77abfce81a0078a695ae688691c5f69d11dbb61c1b3b3461bef22", size = 309734, upload-time = "2025-06-16T06:37:50.825Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/bb/a79f551d73e3c63fcbe3be133a37ef82ba39dab5592ae6c0accc4c75a40a/safetensors-0.6.0rc0-cp38-abi3-win_amd64.whl", hash = "sha256:b2a52ecbf11d67d04668a98d2e29533ac784f70281f19018eae2ec021162b7dc", size = 320991, upload-time = "2025-06-16T06:37:49.317Z" },
 ]
 
 [[package]]

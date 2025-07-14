@@ -73,7 +73,6 @@ class TimeMix(eqx.Module):
         self.out_gn = GroupNorm(n_head, head_size, eps=config.eps)
         self.out = VLinear(d_mid, d_model, key=v_key, use_bias=False, initialization="zeros")
 
-    @eqx.filter_checkpoint
     def __call__(self, current, prev, v_first = None, first_layer: bool = False, state = None, *, state_update, new_mask=None):
         diff = prev - current
         xr, xw, xk, xv, xa, xg = (a[..., 0, :] for a in jnp.split(current[..., None, :] + self.rwkvag * diff[..., None, :], 6, axis=-2))
@@ -119,7 +118,14 @@ class TimeMix(eqx.Module):
             v = v * mm
             a = a * mm
             b = b * mm
-        state, out = state_update(r, w, k, v, a, b, state=state)
+        # r, w, k, v, a, b, state = (x.astype(jnp.bfloat16) if x is not None else None for x in (r, w, k, v, a, b, state))
+        state_update = jax.shard_map(
+            state_update,
+            in_specs=(jax.sharding.PartitionSpec("dp", "mp"),) * 6 + (None,),
+            out_specs=jax.sharding.PartitionSpec("dp", "mp"),
+            check_vma=False,
+        )
+        state, out = state_update(r, w, k, v, a, b, state)
 
         out = rm_heads(out)
         out = self.out_gn(out)

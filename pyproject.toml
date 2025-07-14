@@ -13,6 +13,7 @@ dependencies = [
     "matplotlib>=3.10.3",
     "miditok>=3.0.5.post1",
     "optax>=0.2.5",
+    "safetensors>=0.6.0rc0",
     "simple-parsing>=0.1.7",
     "torch>=2.7.1",
     "wandb>=0.21.0",

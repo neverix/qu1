@@ -74,63 +74,79 @@ class TimeMix(eqx.Module):
         self.out = VLinear(d_mid, d_model, key=v_key, use_bias=False, initialization="zeros")
 
     def __call__(self, current, prev, v_first = None, first_layer: bool = False, state = None, *, state_update, new_mask=None):
-        diff = prev - current
-        xr, xw, xk, xv, xa, xg = (a[..., 0, :] for a in jnp.split(current[..., None, :] + self.rwkvag * diff[..., None, :], 6, axis=-2))
+        with jax.named_scope("Time projections"):
+            diff = prev - current
+            xr, xw, xk, xv, xa, xg = (a[..., 0, :] for a in jnp.split(current[..., None, :] + self.rwkvag * diff[..., None, :], 6, axis=-2))
 
-        bd = current.shape[:-1]
-        add_heads = lambda x: x.reshape(bd + (self.n_head, self.head_size))
-        rm_heads = lambda x: x.reshape(bd + (self.n_head * self.head_size,))
+            bd = current.shape[:-1]
+            add_heads = lambda x: x.reshape(bd + (self.n_head, self.head_size))
+            rm_heads = lambda x: x.reshape(bd + (self.n_head * self.head_size,))
 
-        # lora projections
-        r = self.rw(xr)
-        w = self.w(xw)
-        k = self.kw(xk)
-        v = self.vw(xv)
-        a = jax.nn.sigmoid(self.a(xa))
-        g = self.g(xg)
+            # lora projections
+            r = self.rw(xr)
+            w = self.w(xw)
+            k = self.kw(xk)
+            v = self.vw(xv)
+            a = jax.nn.sigmoid(self.a(xa))
+            g = self.g(xg)
 
-        # create "bone" for our update matrix, the left eigenvector
-        kk = add_heads(k * self.k_k)
-        kk = kk / jnp.linalg.norm(kk, axis=-1, keepdims=True)
-        # optionally upweight some components of k
-        k = k * (1 + (a-1) * self.k_a)
+            # create "bone" for our update matrix, the left eigenvector
+            kk = add_heads(k * self.k_k)
+            kk = kk / jnp.linalg.norm(kk, axis=-1, keepdims=True)
+            # optionally upweight some components of k
+            k = k * (1 + (a-1) * self.k_a)
 
-        # :/
-        if v_first is None:
-            v_first = v
-        v_first = jnp.where(first_layer, v, v_first)
-        v = v + (v_first - v) * jax.nn.sigmoid(self.v(xv))
+            # :/
+            if v_first is None:
+                v_first = v
+            v_first = jnp.where(first_layer, v, v_first)
+            v = v + (v_first - v) * jax.nn.sigmoid(self.v(xv))
 
-        # exp(-exp(-softplus(w)))
-        # w is used as the key to let the past state persist. i don't know why we need two exponentials
-        w = -jnp.exp(-0.606531 * jax.nn.sigmoid(w)) # 0.606531 = exp(-0.5)
+            # exp(-exp(-softplus(w)))
+            # w is used as the key to let the past state persist. i don't know why we need two exponentials
+            w = -jnp.exp(-0.606531 * jax.nn.sigmoid(w)) # 0.606531 = exp(-0.5)
 
-        r_k = add_heads(r * k * self.r_k).sum(axis=-1, keepdims=True)
+            r_k = add_heads(r * k * self.r_k).sum(axis=-1, keepdims=True)
 
-        r, w, k, v = map(add_heads, (r, w, k, v))
-        a, b = -kk, kk * add_heads(a)
+            r, w, k, v = map(add_heads, (r, w, k, v))
+            a, b = -kk, kk * add_heads(a)
 
-        if new_mask is not None:
-            new_mask = jnp.roll(new_mask.at[..., 0].set(0), -1, axis=-1)
-            mm = (1 - new_mask)[..., None, None]
-            w = w * mm
-            k = k * mm
-            v = v * mm
-            a = a * mm
-            b = b * mm
+        with jax.named_scope("Masking"):
+            if new_mask is not None:
+                new_mask = jnp.roll(new_mask.at[..., 0].set(0), -1, axis=-1)
+                mm = (1 - new_mask)[..., None, None]
+                w = w * mm
+                k = k * mm
+                v = v * mm
+                a = a * mm
+                b = b * mm
         # r, w, k, v, a, b, state = (x.astype(jnp.bfloat16) if x is not None else None for x in (r, w, k, v, a, b, state))
-        state_update = jax.shard_map(
-            state_update,
-            in_specs=(jax.sharding.PartitionSpec("dp", "mp"),) * 6 + (None,),
-            out_specs=jax.sharding.PartitionSpec("dp", "mp"),
-            check_vma=False,
-        )
-        state, out = state_update(r, w, k, v, a, b, state)
 
-        out = rm_heads(out)
-        out = self.out_gn(out)
-        out = out + rm_heads(r_k * v)
+        with jax.named_scope("State update"):
+            for i in range(2):
+                try:
+                    if i == 0:
+                        state_update_ = jax.shard_map(
+                            state_update,
+                            in_specs=(jax.sharding.PartitionSpec("dp", "mp"),) * 6 + (None,),
+                            out_specs=jax.sharding.PartitionSpec("dp", "mp"),
+                            check_vma=False,
+                        )
+                    else:
+                        state_update_ = state_update
+                    state, out = state_update_(r, w, k, v, a, b, state)
+                except ValueError as e:
+                    if i != 0:
+                        raise
+                    assert "sharding" in str(e)
+                    continue
+                break
 
-        out = self.out(out * g)
+        with jax.named_scope("Output"):
+            out = rm_heads(out)
+            out = self.out_gn(out)
+            out = out + rm_heads(r_k * v)
+
+            out = self.out(out * g)
         return out, state, v_first
 

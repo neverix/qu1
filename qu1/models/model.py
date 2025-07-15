@@ -29,9 +29,11 @@ class RWKVLayer(eqx.Module):
     def __call__(self, x, v_first, state_update, new_mask=None):
         x = jnp.where(self.layer_idx == 0, vmap_any(self.ln0)(x), x)
         x = vmap_any(self.ln1)(x)
-        x_attn, _state, v_first = self.time_mix(x, time_shift(x), v_first, first_layer=self.layer_idx == 0, state_update=state_update, new_mask=new_mask)
+        with jax.named_scope("Time Mix"):
+            x_attn, _state, v_first = self.time_mix(x, time_shift(x), v_first, first_layer=self.layer_idx == 0, state_update=state_update, new_mask=new_mask)
         x = x + x_attn
-        x = x + self.channel_mix(vmap_any(self.ln2)(x))
+        with jax.named_scope("Channel Mix"):
+            x = x + self.channel_mix(vmap_any(self.ln2)(x))
         return x, v_first
 
 
@@ -61,14 +63,17 @@ class RWKV(eqx.Module):
         self.lm_head = VLinear(config.d_model, config.vocab_size, key=key, initialization="ratio_orthogonal")
 
     def __call__(self, x, new_mask=None):
-        x = vmap_any(self.embedding, n_dims=0)(x)
+        with jax.named_scope("Embedding"):
+            x = self.embedding.weight[x]
         v_first = jnp.zeros_like(x)
         def forward(layer_idx, state):
             x, v_first = state
             layer = jax.tree.map(lambda m: m[layer_idx], self.layers)
-            x, v_first = layer(x, v_first, state_update=self.state_update, new_mask=new_mask)
+            with jax.named_scope("Layer forward"):
+                x, v_first = layer(x, v_first, state_update=self.state_update, new_mask=new_mask)
             return x, v_first
-        x, v_first = jax.lax.fori_loop(0, self.config.n_layers, forward, (x, v_first))
-        y = vmap_any(self.ln_out)(x)
-        y = self.lm_head(y)
+        x, v_first = jax.lax.fori_loop(0, self.config.n_layers, forward, (x, v_first), unroll=True)
+        with jax.named_scope("Output"):
+            y = vmap_any(self.ln_out)(x)
+            y = self.lm_head(y)
         return y

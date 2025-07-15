@@ -1,11 +1,12 @@
 from pathlib import Path
 from functools import partial
-from dataclasses import replace
-from typing import Literal
+from dataclasses import replace, dataclass
+from typing import Literal, Optional
 import os
+from contextlib import nullcontext
 
 from loguru import logger
-from safetensors.numpy import save_file
+from safetensors.numpy import save_file, load_file
 import jax.numpy as jnp
 from torch.utils.data import DataLoader
 import equinox as eqx
@@ -23,11 +24,12 @@ from .rwkv_kernels import rwkv_update, serial_rwkv
 from .midi_data import MidiDataset
 
 
+@dataclass
 class TrainConfig(Serializable):
     tokens_path: Path = Path("data/tokens.dat")
     lengths_path: Path = Path("data/lengths.dat")
     seed: int = 42
-    batch_size: int = 16
+    batch_size: int = 4
     max_tokens_in_batch: int = 4096
     max_steps: int = 1_000_000
     warmup_steps: int = 50
@@ -35,6 +37,7 @@ class TrainConfig(Serializable):
     save_every: int = 1000
     save_dir: Path = Path("models")
     dtype: Literal["bfloat16", "float32"] = "bfloat16"
+    resume: bool = True
     architecture: RWKVConfig = RWKVConfig(
         n_layers=16,
         d_model=512,
@@ -42,25 +45,9 @@ class TrainConfig(Serializable):
         n_head=4,
         d_ff=2048,
     )
-
+    profile_dir: Optional[Path] = None  
 
 def main():
-    os.environ["LIBTPU_INIT_ARGS"] = (
-        os.getenv("LIBTPU_INIT_ARGS", "") + " "
-        "--xla_tpu_enable_latency_hiding_scheduler=true "
-        "--xla_enable_async_collective_permute=true "
-        "--xla_tpu_enable_ag_backward_pipelining=true "
-        "--xla_tpu_enable_data_parallel_all_reduce_opt=true "
-        "--xla_tpu_data_parallel_opt_different_sized_ops=true "
-        "--xla_tpu_enable_async_collective_fusion=true "
-        "--xla_tpu_enable_async_collective_fusion_multiple_steps=true "
-        "--xla_tpu_overlap_compute_collective_tc=true "
-        "--xla_enable_async_all_gather=true "
-        "--xla_tpu_enable_async_collective_fusion_fuse_all_gather=true "
-        "--xla_tpu_megacore_fusion_allow_ags=true "
-        "TPU_MEGACORE=MEGACORE_DENSE "
-    )
-    
     tokenizer = REMI()
     args = parse(TrainConfig)
     dtype = jnp.bfloat16 if args.dtype == "bfloat16" else jnp.float32
@@ -84,9 +71,21 @@ def main():
     )
     with jax.default_device(jax.devices("cpu")[0]):
         rwkv = RWKV(config=config, key=jax.random.key(args.seed),
-                    state_update=eqx.filter_checkpoint(partial(rwkv_update,
-                                        fn=serial_rwkv
-                                        )))
+                    state_update=
+                    # eqx.filter_checkpoint(
+                        partial(rwkv_update,
+                                        fn=serial_rwkv)
+                        # )
+                    )
+        if args.resume and (args.save_dir / "rwkv.safetensors").exists():
+            logger.info(f"Loading model from {args.save_dir / 'rwkv.safetensors'}")
+            state_dict_flat, state_dict_def = jax.tree.flatten(eqx.filter(rwkv, eqx.is_array))
+            state_dict_flat_loaded = load_file(args.save_dir / "rwkv.safetensors")
+            state_dict_flat_loaded = [jnp.asarray(state_dict_flat_loaded[str(i)]) for i, e in enumerate(state_dict_flat_loaded)]
+            state_dict = jax.tree.unflatten(state_dict_def, state_dict_flat_loaded)
+            rwkv = eqx.combine(state_dict, eqx.filter(rwkv, lambda x: not eqx.is_array(x)))
+            logger.info("Model loaded")
+
     with jax.sharding.use_mesh(mesh):
         rwkv = jax.tree.map(lambda x: jax.device_put(x) if isinstance(x, jax.Array) else x, rwkv)
     
@@ -110,11 +109,13 @@ def main():
 
     @eqx.filter_value_and_grad
     def loss_fn(rwkv, tokens, restart_mask):
-        logits = rwkv(tokens, new_mask=restart_mask)
-        logprobs = jax.nn.log_softmax(logits)
-        y_pred = logprobs[..., :-1, :]
-        y_true = tokens[..., 1:]
-        loss = -jnp.take_along_axis(y_pred, y_true[..., None], axis=-1).mean()
+        with jax.named_scope("RWKV Forward"):
+            logits = rwkv(tokens, new_mask=restart_mask)
+        with jax.named_scope("Loss"):
+            logprobs = jax.nn.log_softmax(logits)
+            y_pred = logprobs[..., :-1, :]
+            y_true = tokens[..., 1:]
+            loss = -jnp.take_along_axis(y_pred, y_true[..., None], axis=-1).mean()
         return loss
 
     @eqx.filter_jit
@@ -124,31 +125,35 @@ def main():
         rwkv = eqx.apply_updates(rwkv, updates)
         return loss, rwkv, opt_state
     
-    for training_step, (tokens, restart_mask) in zip(bar := trange(args.max_steps), dataloader):
-        if training_step % args.save_every == 0:
-            state_dict_numpy = jax.tree.map(lambda x: np.asarray(x), eqx.filter(rwkv, eqx.is_array))
-            state_dict_flat = jax.tree.flatten(state_dict_numpy)[0]
-            args.save_dir.mkdir(parents=True, exist_ok=True)
-            save_file({str(k): v for k, v in enumerate(state_dict_flat)}, args.save_dir / f"rwkv.safetensors")
-        
-        tokens, restart_mask = \
-            jnp.asarray(tokens.numpy(), device=jax.devices("cpu")[0]), \
-            jnp.asarray(restart_mask.numpy(), device=jax.devices("cpu")[0])
-        with jax.sharding.use_mesh(mesh):
-            tokens = jax.device_put(tokens, data_sharding)
-            restart_mask = jax.device_put(restart_mask, data_sharding)
-            loss, rwkv, opt_state = train_step(rwkv, tokens, restart_mask, opt_state)
-        itps = bar.format_dict["rate"]
-        if itps is not None:
-            one_v4_chip_flops = 275 * 1e12
-            mfu = (itps * approx_flops) / one_v4_chip_flops
-        else:
-            mfu = 0.0
-        wandb.log({"step": training_step, "loss": float(loss), "mfu": mfu,
-                   "tokens_processed": training_step * args.batch_size * args.max_tokens_in_batch},
-                  step=training_step)
-        bar.set_postfix({"mfu": mfu, "loss": float(loss)})
-    
+
+    with (jax.profiler.trace(args.profile_dir) if args.profile_dir else nullcontext()):
+        try:
+            for training_step, (tokens, restart_mask) in zip(bar := trange(args.max_steps, desc="Training"), dataloader):
+                if training_step % args.save_every == 0:
+                    state_dict_numpy = jax.tree.map(lambda x: np.asarray(x), eqx.filter(rwkv, eqx.is_array))
+                    state_dict_flat = jax.tree.flatten(state_dict_numpy)[0]
+                    args.save_dir.mkdir(parents=True, exist_ok=True)
+                    save_file({str(k): v for k, v in enumerate(state_dict_flat)}, args.save_dir / f"rwkv.safetensors")
+                
+                tokens, restart_mask = \
+                    jnp.asarray(tokens.numpy(), device=jax.devices("cpu")[0]), \
+                    jnp.asarray(restart_mask.numpy(), device=jax.devices("cpu")[0])
+                with jax.sharding.use_mesh(mesh):
+                    tokens = jax.device_put(tokens, data_sharding)
+                    restart_mask = jax.device_put(restart_mask, data_sharding)
+                    loss, rwkv, opt_state = train_step(rwkv, tokens, restart_mask, opt_state)
+                itps = bar.format_dict["rate"]
+                if itps is not None:
+                    one_v4_chip_flops = 275 * 1e12
+                    mfu = (itps * approx_flops) / (one_v4_chip_flops * len(jax.devices("tpu")))
+                else:
+                    mfu = 0.0
+                wandb.log({"step": training_step, "loss": float(loss), "mfu": mfu,
+                        "tokens_processed": training_step * args.batch_size * args.max_tokens_in_batch},
+                        step=training_step)
+                bar.set_postfix({"mfu": mfu, "loss": float(loss)})
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt")
     # Close wandb run
     wandb.finish()
 

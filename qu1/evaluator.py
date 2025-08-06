@@ -28,6 +28,9 @@ class EvalConfig(Serializable):
         n_head=4,
         d_ff=2048,
     )
+    seed: int = 143
+    temperature: float = 0.5
+    top_p: float = 0.9
 
 
 def main():
@@ -47,28 +50,43 @@ def main():
     model = eqx.combine(model_params, model_def)
     logger.info("Model ready")
     
+    forward = eqx.filter_jit(lambda models, tokens, states: model(tokens, states, return_states=True))
     @eqx.filter_jit
-    def forward(model, tokens):
-        return model(tokens)
+    def sample(logits, key):
+        logit = logits[0, -1, :]
+        key, subkey = jax.random.split(key)
+        logit = jax.nn.log_softmax(logit / args.temperature, axis=-1)
+        probs = jax.nn.softmax(logit / args.temperature, axis=-1)
+        probs_argsort = jnp.argsort(probs)
+        reversed_probs_argsort = jnp.argsort(probs_argsort)
+        probs_sorted = probs[probs_argsort]
+        probs_cumsum = jnp.cumsum(probs_sorted)
+        mask = probs_cumsum <= args.top_p
+        mask = mask.at[0].set(True)
+        logit = jnp.where(mask[reversed_probs_argsort], logit, -jnp.inf)
+        logit = jax.nn.log_softmax(logit, axis=-1)
+        return jax.random.categorical(subkey, logit, axis=-1), key
     
     tokens = [4]
-    key = jax.random.key(0)
+    states = None
+    key = jax.random.key(args.seed)
+    logits_so_far = []
     try:
-        for _ in trange(128, desc="Generating"):
-            tokens_jnp = jnp.array(tokens).reshape(1, -1)
-            logits = forward(model, tokens_jnp)
-            logit = logits[0, -1, :]
-            key, subkey = jax.random.split(key)
-            logit = logit + jax.random.gumbel(subkey, logit.shape)
-            next_token = int(logit.argmax())
-            tokens.append(next_token)
+        for _ in (bar := trange(4096, desc="Generating")):
+            tokens_jnp = jnp.array(tokens[-1:]).reshape(1, -1)
+            logits, states = forward(model, tokens_jnp, states)
+            logit_original = jax.nn.log_softmax(logits[0, -1, :], axis=-1)
+            next_token, key = sample(logits, key)
+            logits_so_far.append(float(logit_original[next_token]))
+            tokens.append(int(next_token))
+            bar.set_postfix(nll=np.mean((logits_so_far)))
     except KeyboardInterrupt:
         pass
 
     logger.info("Saving")
     decoded = tokenizer(np.array(tokens)[None])
     args.save_dir.mkdir(parents=True, exist_ok=True)
-    decoded.dump_midi(args.save_dir / "sample.mid")
+    decoded.dump_midi(args.save_dir / "sample.mid")  # type: ignore
     midi_path = args.save_dir / "sample.mid"
     wav_path = args.save_dir / "sample.wav"
     FluidSynth().midi_to_audio(str(midi_path), str(wav_path))

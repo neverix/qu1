@@ -29,7 +29,9 @@ class TrainConfig(Serializable):
     tokens_path: Path = Path("data/tokens.dat")
     lengths_path: Path = Path("data/lengths.dat")
     seed: int = 42
-    batch_size: int = 4
+    batch_size: int = 16
+    gradient_accumulation_steps: int = 1
+    rwkv_checkpoint: bool = False
     max_tokens_in_batch: int = 4096
     max_steps: int = 1_000_000
     warmup_steps: int = 50
@@ -72,10 +74,11 @@ def main():
     with jax.default_device(jax.devices("cpu")[0]):
         rwkv = RWKV(config=config, key=jax.random.key(args.seed),
                     state_update=
-                    # eqx.filter_checkpoint(
+                    (eqx.filter_checkpoint if args.rwkv_checkpoint else lambda x: x)(
                         partial(rwkv_update,
-                                        fn=serial_rwkv)
-                        # )
+                                        fn=serial_rwkv
+                                )
+                        )
                     )
         if args.resume and (args.save_dir / "rwkv.safetensors").exists():
             logger.info(f"Loading model from {args.save_dir / 'rwkv.safetensors'}")
@@ -105,7 +108,9 @@ def main():
             exponent=1.0,
         ))
     )
-    opt_state = optimizer.init(eqx.filter(rwkv, eqx.is_array))
+    if args.gradient_accumulation_steps > 1:
+        optimizer = optax.MultiSteps(optimizer, args.gradient_accumulation_steps)
+    opt_state = optimizer.init(eqx.filter(rwkv, eqx.is_inexact_array))
 
     @eqx.filter_value_and_grad
     def loss_fn(rwkv, tokens, restart_mask):
@@ -118,7 +123,7 @@ def main():
             loss = -jnp.take_along_axis(y_pred, y_true[..., None], axis=-1).mean()
         return loss
 
-    @eqx.filter_jit
+    @eqx.filter_jit(donate="all")
     def train_step(rwkv, tokens, restart_mask, opt_state):
         loss, grads = loss_fn(rwkv, tokens, restart_mask)
         updates, opt_state = optimizer.update(grads, opt_state)
@@ -129,7 +134,7 @@ def main():
     with (jax.profiler.trace(args.profile_dir) if args.profile_dir else nullcontext()):
         try:
             for training_step, (tokens, restart_mask) in zip(bar := trange(args.max_steps, desc="Training"), dataloader):
-                if training_step % args.save_every == 0:
+                if training_step % args.save_every == args.save_every - 1:
                     state_dict_numpy = jax.tree.map(lambda x: np.asarray(x), eqx.filter(rwkv, eqx.is_array))
                     state_dict_flat = jax.tree.flatten(state_dict_numpy)[0]
                     args.save_dir.mkdir(parents=True, exist_ok=True)

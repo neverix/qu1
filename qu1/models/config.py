@@ -8,12 +8,13 @@ class RWKVConfig(eqx.Module):
     d_model: int = eqx.field(static=True)
     vocab_size: int = eqx.field(static=True)
     n_head: int = eqx.field(static=True)
-    d_ff: int = None
-    head_size: int = None
-    d_w: int = None
-    d_a: int = None
-    d_g: int = None
-    d_v: int = None
+    layer_scan: bool = eqx.field(static=True, default=True)
+    d_ff: int | None = None
+    head_size: int | None = None
+    d_w: int | None = None
+    d_a: int | None = None
+    d_g: int | None = None
+    d_v: int | None = None
     eps: float = eqx.static_field(default=64e-5)
     
     def __post_init__(self):

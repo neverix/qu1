@@ -1,2 +1,2 @@
 # qu1
-曲
+RWKV + REMI model for MIDI generation (Aria dataset).
